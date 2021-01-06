@@ -12,11 +12,10 @@ typedef struct __attribute__((__packed__)) {
     int32_t saveVersion;
     int32_t difficulty;
     int32_t startYear;
-    int32_t tiles;
+    int32_t tilesX;
+    int32_t tilesY;
     uint32_t date;
     int64_t money;
-    int32_t __padding;
-    int32_t numMods;
 } TFHeader;
 
 typedef struct {
@@ -54,10 +53,27 @@ size_t decode_lz4(const char* origData, size_t origLen, char* targetBuf, size_t 
         puts("decompress failed");
     }
 
-    printf("used %lu bytes\n", origLen);
+    //printf("used %lu bytes\n", origLen);
 
     LZ4F_freeDecompressionContext(dctx);
     return targetLen;
+}
+
+typedef struct {
+    size_t len;
+    void* data;
+} TFList;
+
+
+// allocates list
+// after finsih addr points to next byte
+char* readTFString(char* buf, size_t* addr) {
+    uint32_t len = *(uint32_t*) (buf + *addr);
+    char *res = malloc(len + 1);
+    memcpy(res, buf + *addr + 4, len);
+    res[len] = 0;
+    *addr += 4 + len + 4;
+    return res;
 }
 
 
@@ -114,11 +130,50 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    TFHeader header;
-    memcpy(&header, rBuf2 + 4, sizeof header);
+    char saveFile = 0;
+    for (size_t i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "-s")) saveFile = 1;
+    }
 
-    printf("version: %x\ndifficulty: %x\nstartYear: %d\ntiles: %d\ndate: %u\nmoney: %ld\n#mods: %u\n", 
-    header.saveVersion, header.difficulty, header.startYear, header.tiles, header.date, header.money, header.numMods);
+    if (saveFile) {
+        // save file
+        size_t rawNameEnd = strlen(argv[1]);
+        char *dsfName = malloc(rawNameEnd + 5);
+        strcpy(dsfName, argv[1]);
+        strcpy(dsfName + rawNameEnd, ".hex");
+        printf("Saving decompressed file to %s\n", dsfName);
+        FILE *decompressedSaveFile = fopen(dsfName, "w");
+
+        size_t w = fwrite(rBuf2, 1, dec2Len, decompressedSaveFile);
+        if (w != dec2Len) {
+            printf("Failed to write all bytes to disk :( | wrote %lu\n", w);
+        }
+        free(dsfName);
+    }
+
+    TFHeader header;
+    size_t headerAddr = 0x4;
+    memcpy(&header, rBuf2 + headerAddr, sizeof header);
+
+    printf("version: %x\ndifficulty: %x\nstartYear: %d\ntiles: %d x %d\ndate: %u\nmoney: %ld\n", 
+    header.saveVersion, header.difficulty, header.startYear, header.tilesX, header.tilesY, header.date, header.money);
+
+    size_t modsListAddr = headerAddr + sizeof header;
+    
+    TFList modsList;
+
+    modsList.len = *(uint32_t*) (rBuf2 + modsListAddr);
+    modsList.data = malloc(modsList.len * sizeof(char*));
+
+    modsListAddr += 4;
+
+    for(size_t modNr = 0; modNr < modsList.len; modNr++) {
+        // read string
+        ((char**)modsList.data)[modNr] = readTFString(rBuf2, &modsListAddr);
+        printf("Mod #%lu: \"%s\"\n", modNr, ((char**)modsList.data)[modNr]);
+    }
+
+    printf("next addr: 0x%lx\n", modsListAddr);
 
     return 0;
 }   
