@@ -1,5 +1,7 @@
 CC = gcc
-CFLAGS = -g -Wall
+CFLAGS = -g -Wall -std=c17
+
+SRC_FILES = $(wildcard src/*.c)
 
 build: src/main.c
-	$(CC) $(CFLAGS) -o main src/main.c -llz4 
+	$(CC) $(CFLAGS) -o main $(SRC_FILES) -llz4 

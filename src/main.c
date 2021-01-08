@@ -6,21 +6,9 @@
 #include <lz4frame.h>
 #include <sys/mman.h>
 
-// packed strucht of tf / tf2 header 
-// by https://www.transportfever.net/index.php?thread/4659-train-fever-savegame-format/
-typedef struct __attribute__((__packed__)) {
-    int32_t saveVersion;
-    int32_t difficulty;
-    int32_t startYear;
-    int32_t tilesX;
-    int32_t tilesY;
-    uint32_t date;
-    int64_t money;
-} TFHeader;
+#include "tfstructs.h"
 
-typedef struct {
-    int32_t len;
-} TFStringHead;
+
 
 
 // decodes data from origData to targetBuf.
@@ -59,27 +47,11 @@ size_t decode_lz4(const char* origData, size_t origLen, char* targetBuf, size_t 
     return targetLen;
 }
 
-typedef struct {
-    size_t len;
-    void* data;
-} TFList;
-
-
-// allocates list
-// after finsih addr points to next byte
-char* readTFString(char* buf, size_t* addr) {
-    uint32_t len = *(uint32_t*) (buf + *addr);
-    char *res = malloc(len + 1);
-    memcpy(res, buf + *addr + 4, len);
-    res[len] = 0;
-    *addr += 4 + len + 4;
-    return res;
-}
 
 
 int main(int argc, char* argv[]) {
 
-    if (argc != 2) {
+    if (argc < 2) {
         puts("specify path to save file");
         return -1;
     }
@@ -101,7 +73,7 @@ int main(int argc, char* argv[]) {
 
     
     char *buf1 = malloc(saveSize * 4);
-    char *rBuf2 = buf1 + saveSize * 2;
+    char *fbuf = buf1 + saveSize * 2;
 
     // DECOMPRESS 1
     size_t dec1Len = decode_lz4(mSaveGame, saveSize, buf1, saveSize * 2);
@@ -113,7 +85,7 @@ int main(int argc, char* argv[]) {
     printf("Dec1 has %lu bytes (%f%% of src)\n", dec1Len, (float)dec1Len * 100.0 / (float) saveSize);
     
     // DECOMPRESS 2
-    size_t dec2Len = decode_lz4(buf1, dec1Len, rBuf2, saveSize * 2);
+    size_t dec2Len = decode_lz4(buf1, dec1Len, fbuf, saveSize * 2);
     if ( dec2Len < 0 ) {
         printf("second decode failed: %ld\n", dec2Len);
         return -1;
@@ -122,10 +94,10 @@ int main(int argc, char* argv[]) {
     printf("Dec2 has %lu bytes (%f%% of src)\n", dec2Len, (float)dec2Len * 100.0 / (float) saveSize);
 
     // check header
-    if (memcmp("tf**", rBuf2, 4)) {
+    if (memcmp("tf**", fbuf, 4)) {
         char sig[5];
-        memcpy(&sig, rBuf2, 4);
-        rBuf2[4] = 0;
+        memcpy(&sig, fbuf, 4);
+        fbuf[4] = 0;
         printf("signature not present | \"%s\"\n", sig);
         return -1;
     }
@@ -144,7 +116,7 @@ int main(int argc, char* argv[]) {
         printf("Saving decompressed file to %s\n", dsfName);
         FILE *decompressedSaveFile = fopen(dsfName, "w");
 
-        size_t w = fwrite(rBuf2, 1, dec2Len, decompressedSaveFile);
+        size_t w = fwrite(fbuf, 1, dec2Len, decompressedSaveFile);
         if (w != dec2Len) {
             printf("Failed to write all bytes to disk :( | wrote %lu\n", w);
         }
@@ -153,27 +125,83 @@ int main(int argc, char* argv[]) {
 
     TFHeader header;
     size_t headerAddr = 0x4;
-    memcpy(&header, rBuf2 + headerAddr, sizeof header);
+    memcpy(&header, fbuf + headerAddr, sizeof header);
 
     printf("version: %x\ndifficulty: %x\nstartYear: %d\ntiles: %d x %d\ndate: %u\nmoney: %ld\n", 
     header.saveVersion, header.difficulty, header.startYear, header.tilesX, header.tilesY, header.date, header.money);
 
     size_t modsListAddr = headerAddr + sizeof header;
-    
-    TFList modsList;
 
-    modsList.len = *(uint32_t*) (rBuf2 + modsListAddr);
-    modsList.data = malloc(modsList.len * sizeof(char*));
+
+    // === MOD NAME LIST ===
+    
+    TFList modNameList;
+
+    modNameList.len = *(uint32_t*) (fbuf + modsListAddr);
+    modNameList.data = malloc(modNameList.len * sizeof(char*));
 
     modsListAddr += 4;
 
-    for(size_t modNr = 0; modNr < modsList.len; modNr++) {
+    for(size_t modNr = 0; modNr < modNameList.len; modNr++) {
         // read string
-        ((char**)modsList.data)[modNr] = readTFString(rBuf2, &modsListAddr);
-        printf("Mod #%lu: \"%s\"\n", modNr, ((char**)modsList.data)[modNr]);
+        ((char**)modNameList.data)[modNr] = readTFString(fbuf, &modsListAddr);
+        printf("Mod #%lu: \"%s\"\n", modNr, ((char**)modNameList.data)[modNr]);
     }
 
-    printf("next addr: 0x%lx\n", modsListAddr);
+    size_t currAddr = modsListAddr;
+    printf("next addr: 0x%lx\n", currAddr);
 
+    uint8_t achievementsEarnable = *(fbuf + currAddr);
+
+    currAddr += 9; // unknown fields
+
+    uint32_t uL1Len = *(uint32_t*)(fbuf + currAddr);
+    currAddr += 4;
+    printf("list len: %u, next addr: 0x%lx\n", uL1Len, currAddr);
+    currAddr += uL1Len;
+    printf("next addr: 0x%lx\n", currAddr);
+
+    
+    // === MOD ID LIST ===
+
+    TFList modIdList;
+    modIdList.len = *(uint32_t*)(fbuf + currAddr);
+    modIdList.data = malloc(sizeof(char*) * modIdList.len);
+
+    printf("midIdLen: %lu\n", modIdList.len);
+
+    currAddr += 4;
+    for (int i = 0; i < modNameList.len; i++) {
+        ((char**)modIdList.data)[i] = readTFString(fbuf, &currAddr);
+        printf("Mod #%lu: \"%s\"\n", i, ((char**)modIdList.data)[i]);
+    }
+
+
+    // === GAME SETTINGS LIST ===
+
+    TFList settingsList;
+    settingsList.len = *(uint32_t*)(fbuf + currAddr);
+    printf("settingsListLen : %lu\n", settingsList.len);
+    settingsList.data = malloc(sizeof(TFKeyValue) * settingsList.len);
+    currAddr += 4;
+
+    for (int i = 0; i < settingsList.len; i++) {
+        TFKeyValue settingsKV = readTFKeyValue(fbuf, &currAddr);
+    }
+
+    // === LIST ===
+
+    TFList u1List;
+    u1List.len = *(uint32_t*)(fbuf + currAddr);
+    printf("u1ListLen : %lu\n", u1List.len);
+    currAddr += 4;
+
+    // 1 byte + 4 byte
+
+    currAddr += 1 + 4;
+
+    char* settingsEndStr = readTFString(fbuf, &currAddr);
+
+    printf("%s | next addr: 0x%lx\n", settingsEndStr, currAddr);
     return 0;
 }   
