@@ -6,7 +6,7 @@ TFKeyValue readTFKeyValue(char* buf, size_t* addr) {
     TFKeyValue kv;
     kv.key = malloc(keyLen + valueLen + 2);
     kv.value = kv.key + keyLen + 1;
-    printf("%lx [%lu] => %lx [%lu]\n", kv.key, keyLen, kv.value, valueLen);
+    //printf("%lx [%u] => %lx [%u]\n", kv.key, keyLen, kv.value, valueLen);
     memcpy(kv.key, buf + *addr + 4, keyLen);
     *(kv.value - 1) = 0;
 

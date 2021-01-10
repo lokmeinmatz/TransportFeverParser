@@ -9,6 +9,21 @@
 #include "tfstructs.h"
 
 
+void printHex(unsigned char* fbuf, size_t start, size_t len) {
+    char *s = malloc(3 * len + 1);
+    for (size_t i = 0; i < len; i++) {
+        unsigned char v = *(fbuf + start + i);
+        unsigned char h = v >> 4;
+        unsigned char l = v & 0xf;
+        s[3*i] = (h < 10 ? '0' : 'a' - 10) + h;
+        s[3*i+1] = (l < 10 ? '0' : 'a' - 10) + l;
+        s[3*i+2] = ' ';
+    }
+    s[3*len] = 0;
+    printf("0x%x | %s\n", start, s);
+    free(s);
+}
+
 
 
 // decodes data from origData to targetBuf.
@@ -104,7 +119,7 @@ int main(int argc, char* argv[]) {
 
     char saveFile = 0;
     for (size_t i = 0; i < argc; i++) {
-        if (strcmp(argv[i], "-s")) saveFile = 1;
+        if (!strcmp(argv[i], "-s")) saveFile = 1;
     }
 
     if (saveFile) {
@@ -171,7 +186,7 @@ int main(int argc, char* argv[]) {
     printf("midIdLen: %lu\n", modIdList.len);
 
     currAddr += 4;
-    for (int i = 0; i < modNameList.len; i++) {
+    for (size_t i = 0; i < modNameList.len; i++) {
         ((char**)modIdList.data)[i] = readTFString(fbuf, &currAddr);
         printf("Mod #%lu: \"%s\"\n", i, ((char**)modIdList.data)[i]);
     }
@@ -194,14 +209,110 @@ int main(int argc, char* argv[]) {
     TFList u1List;
     u1List.len = *(uint32_t*)(fbuf + currAddr);
     printf("u1ListLen : %lu\n", u1List.len);
+    if (u1List.len > 0) {
+        puts("ERROR: listU1List structure unknown. can't continue parsing");
+        return;
+    }
     currAddr += 4;
 
     // 1 byte + 4 byte
 
     currAddr += 1 + 4;
 
-    char* settingsEndStr = readTFString(fbuf, &currAddr);
+    size_t stringLen = *(uint32_t*)(fbuf + currAddr);
+    //printf("len: %lu\n", stringLen);
+    char* settingsEndStr = malloc(stringLen + 1);
+    currAddr += 4;
+    memcpy(settingsEndStr, fbuf + currAddr, stringLen);
+    settingsEndStr[stringLen] = 0;
+
+    currAddr += stringLen;
 
     printf("%s | next addr: 0x%lx\n", settingsEndStr, currAddr);
+
+
+    // mdl asset list
+
+    TFList mdlAssetList;
+    mdlAssetList.len = *(uint32_t*)(fbuf + currAddr);
+    currAddr += 4;
+    mdlAssetList.data = malloc(sizeof(char *) * mdlAssetList.len);
+    char** malData = (char**) mdlAssetList.data;
+    for(size_t i = 0; i < mdlAssetList.len; i++) {
+        stringLen = *(uint32_t*)(fbuf + currAddr);
+        currAddr += 4;
+        // [4 byte id][str + '\0']
+        malData[i] = malloc(4 + stringLen + 1);
+        memcpy(malData[i] + 4, fbuf + currAddr, stringLen);
+        *(malData[i] + 4 + stringLen) = 0;
+        currAddr += stringLen;
+        // copy id
+        *(uint32_t*)malData[i] = *(uint32_t*)(fbuf + currAddr);
+        currAddr += 4;
+
+        //printf("ID: %x | path: %s\n", (uint32_t) *malData[i], malData[i] + 4);
+    }
+
+    printf("assets: %lu\n", mdlAssetList.len);
+
+    printf("next addr: 0x%lx\n", currAddr);
+
+    for(int j = 0; j < 9; j++) {
+        //TFList loadLuaPathsList;
+
+        //loadLuaPathsList.len = *(uint32_t*)(fbuf + currAddr);
+        uint32_t len = *(uint32_t*)(fbuf + currAddr);
+        printf("script chunk %u: %u entries\n", j, len);
+        currAddr += 4;
+        //loadLuaPathsList.data = malloc(sizeof(char*) + loadLuaPathsList.len);
+
+        for(size_t i = 0; i < len; i++) {
+            stringLen = *(uint32_t*)(fbuf + currAddr);
+            currAddr += 4;
+            char *str = malloc(stringLen + 1);
+            memcpy(str, fbuf + currAddr, stringLen);
+            currAddr += stringLen + 4; // + unused id
+            str[stringLen] = 0;
+            //((char**)loadLuaPathsList.data)[i] = str;
+            printf("Lua script: %s\n", str);
+        }
+
+    }
+
+    printf("next addr: 0x%lx\n", currAddr);
+
+
+    // 4.1
+    currAddr += 4; // unknown
+    uint32_t listLen = *(uint32_t*)(fbuf + currAddr);
+    
+    if (listLen != 0) {
+        // I hope listLen is correct and there are 4 byte data, but not sure about that
+        printf("Error on 0x%lx: expected 0 sized list, got %u elements. this list is not reverse engeneered :(\n", currAddr, listLen);
+        return;
+    }
+
+    currAddr += 4;
+
+    uint32_t ecsListLen = *(uint32_t*) (fbuf + currAddr);
+    currAddr += 4;
+    printf("ecs list len: %u\n", ecsListLen);
+    printf("next addr: 0x%lx\n", currAddr);
+
+    for(uint32_t ecsListIdx = 0; ecsListIdx < ecsListLen; ecsListIdx++) {
+        uint32_t innerLen = *(uint32_t*)(fbuf + currAddr);
+        currAddr+=4;
+        printf("\ninner ecs list at 0x%x | size: %u\n", currAddr, innerLen);
+        puts("first:");
+        printHex(fbuf, currAddr, 0x21);
+        currAddr += innerLen * 0x21;
+        
+        // 4 * 8byte trailing
+        currAddr += 32;
+    }
+
+
+    printf("next addr: 0x%lx\n", currAddr);
+
     return 0;
 }   
